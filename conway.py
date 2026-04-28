@@ -42,6 +42,14 @@ Verilog mapping notes
 
 from itertools import product as _product
 
+# Precomputed: _DELTA_LUT[bx][cx_mod3] = ((bx - cx_mod3) + 4) % 3 - 1  ∈ {-1, 0, 1}
+# Replaces the three-operand mod expression in the neighbourhood loop.
+_DELTA_LUT = [
+    [ 0, -1,  1],   # bx = 0
+    [ 1,  0, -1],   # bx = 1
+    [-1,  1,  0],   # bx = 2
+]
+
 
 # ---------------------------------------------------------------------------
 # Block-RAM array
@@ -74,6 +82,8 @@ class BRAMArray:
             [[0] * (self.bw * self.bh) for _ in range(3)]
             for _ in range(3)
         ]
+        # row_lut[y_div3] = y_div3 * bw — eliminates the multiply in addr computation.
+        self.row_lut: list = [i * self.bw for i in range(self.bh)]
 
     def _loc(self, x: int, y: int):
         """Return (bx, by, addr) for pixel (x, y) with toroidal wraparound."""
@@ -111,6 +121,69 @@ class BRAMArray:
             x  = (cx + dx) % self.W
             y  = (cy + dy) % self.H
             addr = (y // 3) * self.bw + (x // 3)
+            nbhd[dy + 1][dx + 1] = self.mem[bx][by][addr]
+        return nbhd
+
+    def write_pixel_fast(self, bx: int, by: int, addr: int, val: int):
+        """Write directly to mem[bx][by][addr] — caller supplies pre-computed indices."""
+        self.mem[bx][by][addr] = val & 1
+
+    def read_neighbourhood_fast(
+        self,
+        cx: int, cy: int,
+        cx_m3: int, cy_m3: int,
+        cx_d3: int, cy_d3: int,
+    ) -> list:
+        """
+        Conflict-free 3×3 neighbourhood read using pre-computed mod3/div3 counters.
+
+        Eliminates all mod and div at runtime:
+          - dx/dy offsets come from _DELTA_LUT (3×3 LUT, no arithmetic).
+          - Toroidal wrap of div3/mod3 is resolved by boundary comparators.
+          - BRAM address = row_lut[y_d3] + x_d3  (LUT lookup + add, no multiply).
+        """
+        bw, bh = self.bw, self.bh
+        row_lut = self.row_lut
+        nbhd = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+        for bx, by in _product(range(3), range(3)):
+            dx = _DELTA_LUT[bx][cx_m3]
+            dy = _DELTA_LUT[by][cy_m3]
+
+            if dx == 0:
+                xd3 = cx_d3
+            elif dx == 1:
+                if cx == self.W - 1:        # right-edge toroidal wrap
+                    xd3 = 0
+                elif cx_m3 == 2:            # cross BRAM-column boundary
+                    xd3 = cx_d3 + 1
+                else:
+                    xd3 = cx_d3
+            else:                           # dx == -1
+                if cx == 0:                 # left-edge toroidal wrap
+                    xd3 = bw - 1
+                elif cx_m3 == 0:            # cross BRAM-column boundary
+                    xd3 = cx_d3 - 1
+                else:
+                    xd3 = cx_d3
+
+            if dy == 0:
+                yd3 = cy_d3
+            elif dy == 1:
+                if cy == self.H - 1:        # bottom-edge toroidal wrap
+                    yd3 = 0
+                elif cy_m3 == 2:
+                    yd3 = cy_d3 + 1
+                else:
+                    yd3 = cy_d3
+            else:                           # dy == -1
+                if cy == 0:                 # top-edge toroidal wrap
+                    yd3 = bh - 1
+                elif cy_m3 == 0:
+                    yd3 = cy_d3 - 1
+                else:
+                    yd3 = cy_d3
+
+            addr = row_lut[yd3] + xd3
             nbhd[dy + 1][dx + 1] = self.mem[bx][by][addr]
         return nbhd
 
@@ -175,9 +248,12 @@ class ConwayStreamingModel:
         self.read_fb = 0
         self.write_fb = 1
 
-        # Raster-scan counters — drive BRAM read address generation
-        self.cx = 0
-        self.cy = 0
+        # Raster-scan counters — drive BRAM read address generation.
+        # Each counter has a paired (mod3, div3) sub-counter updated without
+        # division: the lower counter increments every tick and rolls at 3,
+        # the upper counter increments only when the lower rolls over.
+        self.cx = 0;  self.cx_mod3 = 0;  self.cx_div3 = 0
+        self.cy = 0;  self.cy_mod3 = 0;  self.cy_div3 = 0
 
         # Pipeline stage registers
         #   _s1 : (cx, cy)              – address issued last cycle (→ stage 0 reg)
@@ -229,9 +305,10 @@ class ConwayStreamingModel:
         frame_boundary   = False
 
         if s2 is not None:
-            cx, cy, nbhd = s2
+            cx, cy, cx_m3, cy_m3, cx_d3, cy_d3, nbhd = s2
             val = _conway_rule(nbhd)
-            self.fb[self.write_fb].write_pixel(cx, cy, val)
+            bram = self.fb[self.write_fb]
+            bram.write_pixel_fast(cx_m3, cy_m3, bram.row_lut[cy_d3] + cx_d3, val)
 
             self.out_valid  = True
             self.out_x      = cx
@@ -253,30 +330,47 @@ class ConwayStreamingModel:
         if frame_boundary:
             self._s1 = None
             self._s2 = None
-            self.cx  = 0
-            self.cy  = 0
+            self.cx = 0;  self.cx_mod3 = 0;  self.cx_div3 = 0
+            self.cy = 0;  self.cy_mod3 = 0;  self.cy_div3 = 0
             return
 
         # ── Stage 0→1: issue BRAM read, capture neighbourhood ────────────
         if s1 is not None:
-            cx, cy   = s1
-            nbhd     = self.fb[self.read_fb].read_neighbourhood(cx, cy)
-            self._s2 = (cx, cy, nbhd)
+            cx, cy, cx_m3, cy_m3, cx_d3, cy_d3 = s1
+            nbhd     = self.fb[self.read_fb].read_neighbourhood_fast(
+                cx, cy, cx_m3, cy_m3, cx_d3, cy_d3)
+            self._s2 = (cx, cy, cx_m3, cy_m3, cx_d3, cy_d3, nbhd)
         else:
             self._s2 = None
 
         # ── Counter → stage 0: register current address ──────────────────
-        self._s1 = (self.cx, self.cy)
+        self._s1 = (self.cx, self.cy, self.cx_mod3, self.cy_mod3,
+                    self.cx_div3, self.cy_div3)
 
-        # Advance raster-scan counters (horizontal then vertical)
+        # Advance raster-scan counters using paired (mod3, div3) sub-counters.
+        # No mod or div: lower counter increments and rolls at 3; upper
+        # counter increments only on rollover — directly models hardware.
+        nx_m3 = self.cx_mod3 + 1
+        nx_d3 = self.cx_div3
+        if nx_m3 == 3:
+            nx_m3 = 0
+            nx_d3 += 1
         nx = self.cx + 1
-        ny = self.cy
         if nx == self.W:
-            nx  = 0
-            ny += 1
+            nx = 0;  nx_m3 = 0;  nx_d3 = 0
+            ny_m3 = self.cy_mod3 + 1
+            ny_d3 = self.cy_div3
+            if ny_m3 == 3:
+                ny_m3 = 0
+                ny_d3 += 1
+            ny = self.cy + 1
             if ny == self.H:
-                ny = 0
+                ny = 0;  ny_m3 = 0;  ny_d3 = 0
+        else:
+            ny = self.cy;  ny_m3 = self.cy_mod3;  ny_d3 = self.cy_div3
         self.cx, self.cy = nx, ny
+        self.cx_mod3, self.cx_div3 = nx_m3, nx_d3
+        self.cy_mod3, self.cy_div3 = ny_m3, ny_d3
 
     # -----------------------------------------------------------------------
     # Convenience drivers
