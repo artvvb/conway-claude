@@ -130,42 +130,95 @@ module vga_test (
     wire btn_rise = btn_db & ~btn_db_r;   // one-cycle pulse on press
 
     // =========================================================================
-    // Control state machine  IDLE ↔ RUN
-    // =========================================================================
-    typedef enum logic { IDLE = 1'b0, RUN = 1'b1 } state_t;
-    state_t state;
-
-    always_ff @(posedge pix_clk or negedge rst_n)
-        if (!rst_n)        state <= IDLE;
-        else if (btn_rise) state <= (state == IDLE) ? RUN : IDLE;
-
-    wire running = (state == RUN);
-
-    // =========================================================================
-    // Switch input registered to pixel-clock domain
-    // sw changes orders of magnitude slower than pix_clk; one pipeline register
-    // removes any metastability before the combinational pattern mux.
-    // =========================================================================
-    logic [1:0] sw_r;
-    always_ff @(posedge pix_clk) sw_r <= sw;
-
-    // =========================================================================
     // AXI-Stream wires
     // =========================================================================
-    wire        tvalid_w = running;
-    wire        tready_w;                  // driven by vga_controller
+    wire tvalid_w;                         // assigned below after running is defined
+    wire tready_w;                         // driven by vga_controller
     wire consume = tvalid_w & tready_w;   // one pixel consumed per active clock
 
     // =========================================================================
-    // Pixel counters (px, py)
-    // Advance only when a pixel is consumed so the pattern generator always
-    // knows which logical pixel position it is producing.
+    // Frame-boundary detection
+    //
+    // Shadow pixel counters (px_vga, py_vga) track the VGA controller's active
+    // pixel position by advancing whenever tready_w is asserted, regardless of
+    // tvalid_w.  This works in both IDLE and RUN states so pre_frame fires
+    // even when no pixels are being consumed.
+    //
+    // px_vga and py_vga both wrap to zero at the end of the last active pixel
+    // of each frame, then hold there while tready_w is low (blanking).
+    // pre_frame is therefore asserted from that horizontal blanking period
+    // through the end of vertical blanking — the entire inter-frame gap.
+    //
+    // state_active and sw_active are continuously updated from their pending
+    // counterparts while pre_frame is asserted.  By the time tready_w rises
+    // for pixel (0, 0) of the next frame both registers already carry the new
+    // values, guaranteeing that any run/idle toggle or pattern switch begins
+    // exactly at the first pixel of a frame.
     // =========================================================================
     localparam int H_ACTIVE = 640;
     localparam int V_ACTIVE = 480;
     localparam int PX_W     = $clog2(H_ACTIVE + 1);   // 10 bits
     localparam int PY_W     = $clog2(V_ACTIVE + 1);   //  9 bits
 
+    logic [PX_W-1:0] px_vga;
+    logic [PY_W-1:0] py_vga;
+
+    always_ff @(posedge pix_clk or negedge rst_n) begin
+        if (!rst_n) begin
+            px_vga <= '0;
+            py_vga <= '0;
+        end else if (tready_w) begin
+            if (px_vga == PX_W'(H_ACTIVE - 1)) begin
+                px_vga <= '0;
+                py_vga <= (py_vga == PY_W'(V_ACTIVE - 1)) ? '0 : py_vga + 1'b1;
+            end else
+                px_vga <= px_vga + 1'b1;
+        end
+    end
+
+    // High during the inter-frame blanking gap: tready low, both counters at zero.
+    wire pre_frame = !tready_w && (px_vga == '0) && (py_vga == '0);
+
+    // =========================================================================
+    // Control state machine  IDLE ↔ RUN
+    //
+    // state_pending captures button presses immediately.
+    // state_active only latches from pending during pre_frame so that any
+    // run/idle transition takes effect at pixel (0, 0) of the next frame.
+    // =========================================================================
+    typedef enum logic { IDLE = 1'b0, RUN = 1'b1 } state_t;
+    state_t state_pending, state_active;
+
+    always_ff @(posedge pix_clk or negedge rst_n)
+        if (!rst_n)        state_pending <= IDLE;
+        else if (btn_rise) state_pending <= (state_pending == IDLE) ? RUN : IDLE;
+
+    always_ff @(posedge pix_clk or negedge rst_n)
+        if (!rst_n)         state_active <= IDLE;
+        else if (pre_frame) state_active <= state_pending;
+
+    wire running = (state_active == RUN);
+    assign tvalid_w = running;
+
+    // =========================================================================
+    // Switch input registered to pixel-clock domain
+    // sw_r:     one-register input synchroniser — removes metastability.
+    // sw_active: only latches from sw_r during pre_frame so that pattern
+    //            switches take effect at the same frame boundary as state_active,
+    //            keeping pixel alignment consistent across all transitions.
+    // =========================================================================
+    logic [1:0] sw_r, sw_active;
+    always_ff @(posedge pix_clk) sw_r <= sw;
+
+    always_ff @(posedge pix_clk or negedge rst_n)
+        if (!rst_n)         sw_active <= 2'b00;
+        else if (pre_frame) sw_active <= sw_r;
+
+    // =========================================================================
+    // Pixel counters (px, py)
+    // Advance only when a pixel is consumed so the pattern generator always
+    // knows which logical pixel position it is producing.
+    // =========================================================================
     logic [PX_W-1:0] px;
     logic [PY_W-1:0] py;
     logic [11:0]     frame_cnt;           // wraps at 4096 (~68 s @ 60 fps)
@@ -240,7 +293,7 @@ module vga_test (
 
     logic [11:0] pixel;
     always_comb
-        case (sw_r)
+        case (sw_active)
             2'b00:   // Colour bars (SMPTE palette, 8 × 80 px)
                 pixel = bar_colour;
 
@@ -299,7 +352,7 @@ module vga_test (
         end else begin
             led[0]    <= ~running;
             led[1]    <=  running;
-            led[3:2]  <=  sw_r;
+            led[3:2]  <=  sw_active;
             led[7:4]  <=  frame_cnt[3:0];
             led[8]    <=  pll_locked;
             led[15:9] <= '0;
