@@ -1,0 +1,4 @@
+/hw/
+/hw/**
+/__pycache__/
+/__pycache__/**
