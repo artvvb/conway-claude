@@ -130,31 +130,49 @@ module vga_test (
     wire btn_rise = btn_db & ~btn_db_r;   // one-cycle pulse on press
 
     // =========================================================================
+    // AXI-Stream wires
+    // frame_start and tready_w are outputs of vga_controller (declared below).
+    // tvalid_w is assigned after running is defined in the state machine.
+    // =========================================================================
+    wire tvalid_w;                          // driven by assign after state machine
+    wire tready_w;                          // driven by vga_controller
+    wire frame_start;                       // driven by vga_controller — see vga.sv
+    wire consume = tvalid_w & tready_w;    // one pixel consumed per active clock
+
+    // =========================================================================
     // Control state machine  IDLE ↔ RUN
+    //
+    // state_pending captures button presses immediately.
+    // state_active latches from pending on frame_start — one cycle before
+    // tready_w rises for pixel (0, 0) — so every run/idle transition and
+    // every pattern switch begins exactly at the first pixel of a new frame.
     // =========================================================================
     typedef enum logic { IDLE = 1'b0, RUN = 1'b1 } state_t;
-    state_t state;
+    state_t state_pending, state_active;
 
     always_ff @(posedge pix_clk or negedge rst_n)
-        if (!rst_n)        state <= IDLE;
-        else if (btn_rise) state <= (state == IDLE) ? RUN : IDLE;
+        if (!rst_n)        state_pending <= IDLE;
+        else if (btn_rise) state_pending <= (state_pending == IDLE) ? RUN : IDLE;
 
-    wire running = (state == RUN);
+    always_ff @(posedge pix_clk or negedge rst_n)
+        if (!rst_n)           state_active <= IDLE;
+        else if (frame_start) state_active <= state_pending;
+
+    wire running = (state_active == RUN);
+    assign tvalid_w = running;
 
     // =========================================================================
     // Switch input registered to pixel-clock domain
-    // sw changes orders of magnitude slower than pix_clk; one pipeline register
-    // removes any metastability before the combinational pattern mux.
+    // sw_r:     one-register synchroniser — filters metastability.
+    // sw_active: latches from sw_r on frame_start so pattern switches take
+    //            effect at the same frame boundary as state_active.
     // =========================================================================
-    logic [1:0] sw_r;
+    logic [1:0] sw_r, sw_active;
     always_ff @(posedge pix_clk) sw_r <= sw;
 
-    // =========================================================================
-    // AXI-Stream wires
-    // =========================================================================
-    wire        tvalid_w = running;
-    wire        tready_w;                  // driven by vga_controller
-    wire consume = tvalid_w & tready_w;   // one pixel consumed per active clock
+    always_ff @(posedge pix_clk or negedge rst_n)
+        if (!rst_n)           sw_active <= 2'b00;
+        else if (frame_start) sw_active <= sw_r;
 
     // =========================================================================
     // Pixel counters (px, py)
@@ -240,7 +258,7 @@ module vga_test (
 
     logic [11:0] pixel;
     always_comb
-        case (sw_r)
+        case (sw_active)
             2'b00:   // Colour bars (SMPTE palette, 8 × 80 px)
                 pixel = bar_colour;
 
@@ -281,7 +299,8 @@ module vga_test (
         .vga_b         (vgaBlue),
         .vga_hsync     (Hsync),
         .vga_vsync     (Vsync),
-        .vga_de        ()
+        .vga_de        (),
+        .frame_start   (frame_start)
     );
 
     // =========================================================================
@@ -299,7 +318,7 @@ module vga_test (
         end else begin
             led[0]    <= ~running;
             led[1]    <=  running;
-            led[3:2]  <=  sw_r;
+            led[3:2]  <=  sw_active;
             led[7:4]  <=  frame_cnt[3:0];
             led[8]    <=  pll_locked;
             led[15:9] <= '0;

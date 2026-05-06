@@ -54,7 +54,13 @@ module vga_controller #(
     output logic [3:0] vga_b,
     output logic       vga_hsync,
     output logic       vga_vsync,
-    output logic       vga_de          // display enable, high during active region
+    output logic       vga_de,         // display enable, high during active region
+
+    // Frame-start strobe — combinational, asserted for one pixel clock during
+    // the very last blanking cycle before the raster counters wrap to (0, 0).
+    // The upstream has exactly one full cycle to register pending state changes
+    // before s_axis_tready rises for the first pixel of the new frame.
+    output wire        frame_start
 );
 
     // -------------------------------------------------------------------------
@@ -105,6 +111,10 @@ module vga_controller #(
 
     wire in_vsync = (v_cnt >= V_CNT_W'(V_SYNC_START)) &&
                     (v_cnt <  V_CNT_W'(V_SYNC_END));
+
+    // h_last && v_last is the final cycle of blanking; on the next posedge
+    // h_cnt and v_cnt wrap to 0 and s_axis_tready rises for pixel (0, 0).
+    assign frame_start = h_last && v_last;
 
     // -------------------------------------------------------------------------
     // AXI-Stream backpressure
