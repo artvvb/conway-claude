@@ -253,9 +253,9 @@ module conway_top (
         if (!rst_n) led <= '0;
         else begin
             led[0]    <= cw_run;
-            led[1]    <= cw_prog_mode;
+            led[1]    <= 1'b0;
             led[2]    <= fd_toggle;
-            led[3]    <= 1'b0;
+            led[3]    <= cw_prog_mode;
             led[7:4]  <= heartbeat[21:18];
             led[8]    <= pll_locked;
             led[15:9] <= '0;
