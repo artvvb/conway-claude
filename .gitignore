@@ -2,3 +2,5 @@
 /hw/**
 /__pycache__/
 /__pycache__/**
+*.jou
+*.log
