@@ -16,6 +16,7 @@
 
 `timescale 1ns / 1ps
 `default_nettype none
+`include "uart_rx.sv"
 
 module uart_rx_test (
     input  wire         clk,    // 100 MHz system clock (W5)
