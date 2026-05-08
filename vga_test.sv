@@ -31,6 +31,7 @@
 
 `timescale 1ns / 1ps
 `default_nettype none
+`include "vga.sv"
 
 module vga_test (
     input  wire         clk,      // 100 MHz system clock (W5)
