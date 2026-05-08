@@ -48,6 +48,8 @@
 `timescale 1ns / 1ps
 `default_nettype none
 
+`include "bram.sv"
+
 module conway #(
     parameter int W   = 640,                                // grid width
     parameter int H   = 480,                                // grid height
@@ -272,19 +274,20 @@ module conway #(
     end
 
     // -------------------------------------------------------------------------
-    // BRAM array -- 2 framebuffers x 9 BRAMs.  Inferred as block RAM by Vivado.
-    // We declare the engine write decode signals first (used inside generate).
+    // BRAM array -- 2 framebuffers x 9 instances of bram.sv (depth W3*H3 x 1).
+    //
+    // Each bram has its own flat 1-D mem array, which Vivado infers cleanly
+    // as a true block RAM.  An aggregated 3-D `logic mem [0:2][0:2][...]`
+    // here would trigger Synth 8-11357 ("Potential Runtime issue for 3D-RAM"
+    // with hundreds of thousands of registers) and stall synthesis.
     // -------------------------------------------------------------------------
     logic [A_W-1:0] eng_w_addr;
     logic           eng_w_data;
     logic [1:0]     eng_w_bx, eng_w_by;
     logic           eng_w_en;
 
-    logic mem_fb0 [0:2][0:2][0:W3*H3-1];
-    logic mem_fb1 [0:2][0:2][0:W3*H3-1];
-
-    logic rdata_fb0 [0:2][0:2];
-    logic rdata_fb1 [0:2][0:2];
+    wire rdata_fb0 [0:2][0:2];
+    wire rdata_fb1 [0:2][0:2];
 
     genvar gb_x, gb_y;
     generate
@@ -307,14 +310,23 @@ module conway #(
                 wire [A_W-1:0] waddr = prog_mode ? pw_addr   : eng_w_addr;
                 wire           wdat  = prog_mode ? prog_data : eng_w_data;
 
-                always_ff @(posedge clk) begin
-                    if (we0) mem_fb0[gb_x][gb_y][waddr] <= wdat;
-                    rdata_fb0[gb_x][gb_y] <= mem_fb0[gb_x][gb_y][r_addr[gb_x][gb_y]];
-                end
-                always_ff @(posedge clk) begin
-                    if (we1) mem_fb1[gb_x][gb_y][waddr] <= wdat;
-                    rdata_fb1[gb_x][gb_y] <= mem_fb1[gb_x][gb_y][r_addr[gb_x][gb_y]];
-                end
+                bram #(.DEPTH(W3 * H3)) bram_fb0 (
+                    .clk   (clk),
+                    .we    (we0),
+                    .waddr (waddr),
+                    .wdata (wdat),
+                    .raddr (r_addr[gb_x][gb_y]),
+                    .rdata (rdata_fb0[gb_x][gb_y])
+                );
+
+                bram #(.DEPTH(W3 * H3)) bram_fb1 (
+                    .clk   (clk),
+                    .we    (we1),
+                    .waddr (waddr),
+                    .wdata (wdat),
+                    .raddr (r_addr[gb_x][gb_y]),
+                    .rdata (rdata_fb1[gb_x][gb_y])
+                );
             end
         end
     endgenerate
