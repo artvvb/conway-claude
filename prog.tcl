@@ -1,7 +1,13 @@
-# Invoke with "vivado -mode batch -source ./prog.tcl"
+# Invoke with "vivado -mode batch -source ./prog.tcl -tclargs <top_module>"
+# If no top_module is supplied, defaults to vga_test.
 
 set script_dir [file dirname [file normalize [info script]]]
-set top_module {vga_test}
+if {$argc >= 1} {
+    set top_module [lindex $argv 0]
+} else {
+    set top_module {vga_test}
+}
+puts "prog.tcl: top_module = ${top_module}"
 
 open_hw_manager
 connect_hw_server -allow_non_jtag

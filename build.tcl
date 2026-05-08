@@ -1,7 +1,13 @@
-# Invoke with "vivado -mode batch -source ./build.tcl"
+# Invoke with "vivado -mode batch -source ./build.tcl -tclargs <top_module>"
+# If no top_module is supplied, defaults to vga_test.
 
 set script_dir [file dirname [file normalize [info script]]]
-set top_module {vga_test}
+if {$argc >= 1} {
+    set top_module [lindex $argv 0]
+} else {
+    set top_module {vga_test}
+}
+puts "build.tcl: top_module = ${top_module}"
 
 if {[file exists ${script_dir}/hw] == 0} {file mkdir ${script_dir}/hw}
 
