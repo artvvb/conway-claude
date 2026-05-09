@@ -270,6 +270,16 @@ module conway #(
                 for (int by = 0; by < 3; by++)
                     oob_s1[bx][by] <= oob_mask[bx][by];
             valid_s1 <= 1'b1;
+        end else begin
+            // enable=0 (blanking).  valid_s1 is registered from the previous
+            // cycle's enable, so it stays high for ONE carry-over cycle into
+            // blanking -- exactly the cycle in which the pipeline writes the
+            // final pixel (W-1, H-1) and last_pixel_write fires.  Without
+            // this drain, valid_s1 would stay high for the whole blanking
+            // interval, causing eng_w_en and last_pixel_write to assert
+            // every cycle and read_fb to toggle ~36000 times per frame
+            // (V_BLANK length), so the simulation appears frozen.
+            valid_s1 <= 1'b0;
         end
     end
 
