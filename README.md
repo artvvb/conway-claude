@@ -1,8 +1,8 @@
-# Streaming Conway's Game of Life on Basys 3
+# Streaming Conway's Game of Life
 
-A SystemVerilog implementation of Conway's Game of Life that streams 1 pixel
-per pixel-clock to a 640 x 480 VGA display, controlled over UART by a Python
-host. Targets the Digilent Basys 3 (Xilinx XC7A35T-1CPG236C).
+A SystemVerilog implementation of Conway's Game of Life, streams 1 pixel per pixel-clock to a 640 x 480 VGA display, controlled over UART by a Python host. Targets the Digilent Basys 3 (Xilinx XC7A35T-1CPG236C).
+
+**Important:** This prototype project has largely been generated using Claude code, as an experiment in digital hardware design through code generation tools. The git history is intended to reflect what has been added by hand and what hasn't - commits with a prompt in the extended commit description consist entirely of the output of that prompt, with some followups rejecting specific changes and prompting further edits, but no hand-written edits.
 
 ## Overview
 
@@ -10,6 +10,10 @@ The interesting part is the architecture, not the cellular automaton. To produce
 one new pixel per pixel-clock cycle the engine has to read a 3 x 3 neighbourhood
 in a single cycle, every cycle. A single block RAM only has two ports, so a
 naive scheme can't service nine simultaneous reads.
+
+Before attempting generation of SystemVerilog sources or testbenches, the
+architecture was first modeled in `conway.py`, with prompts that indicated that
+the code would eventually be used to generate a hardware design.
 
 The trick used here, mirrored from `conway.py`, is a **3 x 3 bank of 1-bit
 BRAMs per framebuffer**. Pixel `(x, y)` lives in `BRAM[x mod 3][y mod 3]` at
@@ -31,9 +35,8 @@ Other bits worth a look:
 - **UART command protocol** with a Python loader and a tkinter GUI, so loading
   a pattern is one shell command (or a click).
 
-The repo also ships two simpler test bitstreams (`vga_test`, `uart_rx_test`)
-that were stepping stones to the final design and are still useful for
-bring-up.
+The repo also includes source for two simpler test bitstreams (`vga_test`, `uart_rx_test`)
+that were stepping stones to the final design and are still useful for bring-up.
 
 ## Command-line build
 
@@ -71,8 +74,8 @@ vivado -mode batch -source ./prog.tcl -tclargs conway_top
 ## Running Conway from the command line
 
 Once the board is programmed with `conway_top.bit` and the USB-UART bridge
-shows up as a serial port (e.g. `COM3` on Windows), `conway_load.py` is the
-front door:
+shows up as a serial port (e.g. `COM3` on Windows - check the Device Manager),
+`conway_load.py` is the front door:
 
 ```
 python conway_load.py COM3
@@ -93,9 +96,9 @@ Built-in patterns: `glider`, `blinker`, `block`, `beacon`, `toad`, `lwss`,
 `glider-fleet`, `blinker-grid`, `block-grid`, `random`, and `stripes`. See
 `--help` for tiling / random / position options.
 
-For lower-level control there's also `uart_write.py`, which sends raw 4-digit
-hex words at a prompt and exits on `q`. Useful when developing or debugging
-the protocol.
+Note: For lower-level control there's also `uart_write.py`, initially intended
+for use with the uart_rx_test image, which sends raw 4-digit hex words at a prompt
+and exits on `q`. Useful when developing or debugging the protocol.
 
 ## Running Conway from the GUI
 
