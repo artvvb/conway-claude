@@ -2,7 +2,7 @@
 
 A SystemVerilog implementation of Conway's Game of Life, streams 1 pixel per pixel-clock to a 640 x 480 VGA display, controlled over UART by a Python host. Targets the Digilent Basys 3 (Xilinx XC7A35T-1CPG236C).
 
-**Important:** This prototype project has largely been generated using Claude code, as an experiment in digital hardware design through code generation tools. The git history is intended to reflect what has been added by hand and what hasn't - commits with a prompt in the extended commit description consist entirely of the output of that prompt, with some followups rejecting specific changes and prompting further edits, but no hand-written edits.
+**Important:** This prototype project - including the bulk of this README - has been largely generated using Claude code as an experiment in digital hardware design through code generation tools. The git history is intended to reflect what has been added by hand and what hasn't. Commits with a prompt in the extended commit description consist entirely of the output of that prompt, with some follow-ups rejecting specific changes and prompting further edits. Hand-written changes are relegated to their own commits.
 
 ## Overview
 
