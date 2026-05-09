@@ -357,9 +357,15 @@ module conway #(
             for (int by = 0; by < 3; by++) begin
                 automatic logic signed [1:0] dx = delta_lut(2'(bx), cx_m3_s1);
                 automatic logic signed [1:0] dy = delta_lut(2'(by), cy_m3_s1);
+                // Widen to int before adding 1.  `dy + 2'sd1` evaluates in
+                // 2-bit signed context, so dy=+1 wraps to -2 and the write
+                // to nbhd[2][..] silently goes out of bounds.  int'() sign-
+                // extends to 32 bits where +1+1 = 2 with no overflow.
+                automatic int                r_idx = int'(dy) + 1;
+                automatic int                c_idx = int'(dx) + 1;
                 automatic logic              raw;
                 raw = read_fb ? rdata_fb1[bx][by] : rdata_fb0[bx][by];
-                nbhd[dy + 2'sd1][dx + 2'sd1] = oob_s1[bx][by] ? 1'b0 : raw;
+                nbhd[r_idx][c_idx] = oob_s1[bx][by] ? 1'b0 : raw;
             end
         end
     end
